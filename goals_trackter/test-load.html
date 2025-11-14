@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Load Test</title>
+    <script>
+        // Capture all errors
+        window.addEventListener('error', (e) => {
+            console.error('ERROR:', e.message, e.filename, e.lineno);
+            document.body.innerHTML += '<div style="color:red;padding:10px;margin:10px;border:1px solid red;">ERROR: ' + e.message + '</div>';
+        });
+        
+        window.addEventListener('unhandledrejection', (e) => {
+            console.error('UNHANDLED PROMISE REJECTION:', e.reason);
+            document.body.innerHTML += '<div style="color:red;padding:10px;margin:10px;border:1px solid red;">PROMISE REJECTION: ' + e.reason + '</div>';
+        });
+        
+        // Log when DOM is ready
+        document.addEventListener('DOMContentLoaded', () => {
+            console.log('DOM Content Loaded');
+            setTimeout(() => {
+                const root = document.getElementById('root');
+                if (root && root.children.length === 0) {
+                    document.body.innerHTML = '<div style="color:red;padding:20px;">ERROR: React did not mount - root div is empty!</div>';
+                }
+            }, 3000);
+        });
+    </script>
+</head>
+<body>
+    <h1>Testing React App Load</h1>
+    <div id="status">Checking if app loads...</div>
+    <div id="root"></div>
+    <script type="module" crossorigin src="/assets/index-DJXWR2Ow.js"></script>
+    <link rel="stylesheet" crossorigin href="/assets/index-iHkSUKq5.css">
+</body>
+</html>
