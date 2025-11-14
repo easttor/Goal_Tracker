@@ -1,0 +1,41 @@
+
+============================================================
+Testing: Minimal_React
+URL: https://god7aypl3xkb.space.minimax.io
+============================================================
+
+Loading page...
+✓ Page loaded (status: 200)
+
+Root content length: 404 characters
+✓ Root div has content
+✓ App content detected
+✓ Screenshot saved: /workspace/screenshot_Minimal_React.png
+
+--- Console Messages (4) ---
+[log] [MINIMAL] Starting minimal test app
+[log] [MINIMAL] Root element found, rendering
+[log] [MINIMAL] Render complete
+[log] [MINIMAL] Rendering MinimalApp
+
+✓ No JavaScript errors detected
+
+============================================================
+Testing: Full_App_No_StrictMode
+URL: https://jecpj8btabxn.space.minimax.io
+============================================================
+
+Loading page...
+✓ Page loaded (status: 200)
+
+Root content length: 0 characters
+✗ WARNING: Root div appears empty or minimal!
+Root HTML: 
+✓ Screenshot saved: /workspace/screenshot_Full_App_No_StrictMode.png
+
+--- JavaScript Errors (1) ---
+PAGE ERROR: require is not defined
+
+============================================================
+Testing complete. Check screenshots for visual confirmation.
+============================================================

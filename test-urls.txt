@@ -1,0 +1,16 @@
+Test URLs for White Screen Debug:
+
+1. Minimal React App (basic test):
+   https://god7aypl3xkb.space.minimax.io
+   
+2. Full App with Debug Logging:
+   https://p1ygh23c8w9l.space.minimax.io
+   
+3. Full App without StrictMode:
+   https://jecpj8btabxn.space.minimax.io
+
+Original URL with issue:
+   https://uyraawddj1pn.space.minimax.io
+
+Please test URL #1 first - if it shows "Goals Tracker App" heading, React is working.
+Then test #2 or #3 and open browser DevTools Console (F12) to see log messages.

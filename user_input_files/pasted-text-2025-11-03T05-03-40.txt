@@ -1,0 +1,978 @@
+import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { initializeApp } from 'firebase/app';
+import { 
+    getAuth, 
+    signInAnonymously, 
+    signInWithCustomToken, 
+    onAuthStateChanged 
+} from 'firebase/auth';
+import { 
+    getFirestore, 
+    doc, 
+    addDoc, 
+    setDoc, 
+    updateDoc, 
+    deleteDoc, 
+    onSnapshot, 
+    collection, 
+    query 
+} from 'firebase/firestore';
+import { 
+    BookText, 
+    Target, 
+    BarChart3, 
+    GanttChart, 
+    Download, 
+    Save, 
+    Plus, 
+    Search, 
+    ArrowLeft, 
+    MoreHorizontal, 
+    Bell, 
+    Award, 
+    Flame, 
+    CheckCircle, 
+    BookMarked, 
+    Calendar, 
+    Check, 
+    Pencil, 
+    Trash2,
+    BookOpen,
+    Dumbbell,
+    Plane,
+    Code,
+    Sparkles,
+    GraduationCap,
+    Briefcase,
+    Coffee
+} from 'lucide-react';
+
+// --- Firebase Configuration ---
+// These variables will be provided by the environment
+const appId = typeof __app_id !== 'undefined' ? __app_id : 'default-app-id';
+const firebaseConfig = typeof __firebase_config !== 'undefined' ? JSON.parse(__firebase_config) : { apiKey: "DEFAULT_KEY", authDomain: "DEFAULT_DOMAIN", projectId: "DEFAULT_PROJECT_ID" };
+const initialAuthToken = typeof __initial_auth_token !== 'undefined' ? __initial_auth_token : null;
+
+// Helper to get today's date in 'YYYY-MM-DD' format
+const getTodayDateString = () => {
+    const today = new Date();
+    const year = today.getFullYear();
+    const month = (today.getMonth() + 1).toString().padStart(2, '0');
+    const day = today.getDate().toString().padStart(2, '0');
+    return `${year}-${month}-${day}`;
+};
+
+// Helper for default data
+const createDefaultData = () => {
+    const today = getTodayDateString();
+    const tomorrowDate = new Date();
+    tomorrowDate.setDate(tomorrowDate.getDate() + 1);
+    const tomorrow = tomorrowDate.toISOString().split('T')[0];
+
+    return [
+        {
+            title: 'Fitness Journey',
+            description: 'Get back in shape and run a 5k.',
+            icon: 'Dumbbell',
+            color: 'blue',
+            imageUrl: 'https://placehold.co/600x400/3b82f6/FFF?text=Fitness',
+            deadline: '2025-12-31',
+            tasks: [
+                { id: 101, text: 'Workout for 30 minutes', dueDate: today, isComplete: false },
+                { id: 102, text: 'Buy new running shoes', dueDate: today, isComplete: true },
+                { id: 103, text: 'Sign up for 5k race', dueDate: tomorrow, isComplete: false }
+            ]
+        },
+        {
+            title: 'Read 52 Books',
+            description: 'One book per week for the year.',
+            icon: 'BookOpen',
+            color: 'purple',
+            imageUrl: 'https://placehold.co/600x400/8b5cf6/FFF?text=Reading',
+            deadline: '2025-12-31',
+            tasks: [
+                { id: 201, text: 'Finish "Dune"', dueDate: tomorrow, isComplete: false },
+                { id: 202, text: 'Read for 30 minutes', dueDate: today, isComplete: false }
+            ]
+        }
+    ];
+};
+
+// --- Icon Component Map ---
+// Maps string names to Lucide components for dynamic rendering
+const iconMap = {
+    Target: (props) => <Target {...props} />,
+    BookOpen: (props) => <BookOpen {...props} />,
+    Dumbbell: (props) => <Dumbbell {...props} />,
+    Plane: (props) => <Plane {...props} />,
+    Code: (props) => <Code {...props} />,
+    Sparkles: (props) => <Sparkles {...props} />,
+    GraduationCap: (props) => <GraduationCap {...props} />,
+    Briefcase: (props) => <Briefcase {...props} />,
+    Coffee: (props) => <Coffee {...props} />,
+};
+
+const iconOptions = [
+    { value: 'Target', label: '🎯 Target' },
+    { value: 'BookOpen', label: '📚 Book' },
+    { value: 'Dumbbell', label: '🏋️ Dumbbell' },
+    { value: 'Plane', label: '✈️ Plane' },
+    { value: 'Code', label: '💻 Code' },
+    { value: 'Sparkles', label: '✨ Sparkles' },
+    { value: 'GraduationCap', label: '🎓 Cap' },
+    { value: 'Briefcase', label: '💼 Briefcase' },
+    { value: 'Coffee', label: '☕ Coffee' },
+];
+
+const colorOptions = [
+    { value: 'blue', label: 'Blue' },
+    { value: 'purple', label: 'Purple' },
+    { value: 'green', label: 'Green' },
+    { value: 'red', label: 'Red' },
+    { value: 'yellow', label: 'Yellow' },
+];
+
+// --- Main App Component ---
+export default function App() {
+    // Firebase State
+    const [db, setDb] = useState(null);
+    const [auth, setAuth] = useState(null);
+    const [userId, setUserId] = useState(null);
+    const [isAuthReady, setIsAuthReady] = useState(false);
+    const collectionPath = useMemo(() => {
+        if (!userId) return null;
+        return `artifacts/${appId}/users/${userId}/goals`;
+    }, [userId]);
+
+    // App State
+    const [goals, setGoals] = useState([]);
+    const [currentPage, setCurrentPage] = useState('diary');
+    const [modal, setModal] = useState({ type: null, data: {} }); // { type: 'addGoal' | 'editGoal' | 'addTask' | 'editTask' | 'delete', data: {...} }
+    const [highlightGoalId, setHighlightGoalId] = useState(null);
+    
+    // Refs for scrolling
+    const goalRefs = useRef({});
+
+    // --- Firebase Initialization Effect ---
+    useEffect(() => {
+        const app = initializeApp(firebaseConfig);
+        const authInstance = getAuth(app);
+        const dbInstance = getFirestore(app);
+        
+        setAuth(authInstance);
+        setDb(dbInstance);
+
+        const unsubscribe = onAuthStateChanged(authInstance, async (user) => {
+            if (user) {
+                // User is signed in
+                setUserId(user.uid);
+                setIsAuthReady(true);
+            } else {
+                // User is signed out, sign them in
+                try {
+                    if (initialAuthToken) {
+                        await signInWithCustomToken(authInstance, initialAuthToken);
+                    } else {
+                        await signInAnonymously(authInstance);
+                    }
+                } catch (error) {
+                    console.error("Error signing in:", error);
+                }
+            }
+        });
+
+        return () => unsubscribe(); // Cleanup on unmount
+    }, []);
+
+    // --- Firestore Data Fetching Effect ---
+    useEffect(() => {
+        if (!isAuthReady || !db || !collectionPath) return;
+
+        // Function to create default data in Firestore
+        const createDefaultDataInFirestore = async () => {
+            try {
+                const defaultGoals = createDefaultData();
+                for (const goal of defaultGoals) {
+                    // Make sure 'tasks' is an array
+                    goal.tasks = goal.tasks || [];
+                    await addDoc(collection(db, collectionPath), goal);
+                }
+            } catch (error) {
+                console.error("Error creating default data: ", error);
+            }
+        };
+
+        const q = query(collection(db, collectionPath));
+        const unsubscribe = onSnapshot(q, (snapshot) => {
+            if (snapshot.empty) {
+                // If collection is empty, populate with default data
+                createDefaultDataInFirestore();
+            } else {
+                const goalsData = snapshot.docs.map(doc => ({
+                    id: doc.id,
+                    ...doc.data(),
+                    // Ensure tasks is always an array
+                    tasks: doc.data().tasks || [] 
+                }));
+                setGoals(goalsData);
+            }
+        }, (error) => {
+            console.error("Error fetching goals: ", error);
+        });
+
+        return () => unsubscribe(); // Cleanup listener
+    }, [isAuthReady, db, collectionPath]);
+
+    // --- Derived State for Today's Tasks ---
+    const todayTasks = useMemo(() => {
+        const today = getTodayDateString();
+        const tasks = [];
+        goals.forEach(goal => {
+            goal.tasks.forEach(task => {
+                if (task.dueDate === today) {
+                    tasks.push({ ...task, goalId: goal.id, goalTitle: goal.title });
+                }
+            });
+        });
+        return tasks;
+    }, [goals]);
+
+    // --- Event Handlers (CRUD) ---
+
+    const handleSaveGoal = async (goalData) => {
+        if (!db || !collectionPath) return;
+
+        // Ensure tasks is an array
+        const tasks = goalData.tasks || [];
+        
+        try {
+            if (modal.type === 'editGoal') {
+                // Update existing goal
+                const docRef = doc(db, collectionPath, modal.data.id);
+                const { id, ...dataToUpdate } = goalData; // Exclude id from data
+                dataToUpdate.tasks = tasks; // Ensure tasks array is included
+                await updateDoc(docRef, dataToUpdate);
+            } else {
+                // Add new goal
+                await addDoc(collection(db, collectionPath), { ...goalData, tasks: [] });
+            }
+            setModal({ type: null, data: {} }); // Close modal
+        } catch (error) {
+            console.error("Error saving goal: ", error);
+        }
+    };
+
+    const handleSaveTask = async (taskData) => {
+        if (!db) return;
+
+        const goalId = modal.data.goalId;
+        const goal = goals.find(g => g.id === goalId);
+        if (!goal) return;
+
+        let newTasks = [];
+        try {
+            if (modal.type === 'editTask') {
+                // Update existing task
+                newTasks = goal.tasks.map(t => 
+                    t.id === modal.data.id ? { ...t, ...taskData } : t
+                );
+            } else {
+                // Add new task
+                const newTask = { ...taskData, id: Date.now(), isComplete: false };
+                newTasks = [...goal.tasks, newTask];
+            }
+            
+            const docRef = doc(db, collectionPath, goalId);
+            await updateDoc(docRef, { tasks: newTasks });
+            
+            setModal({ type: null, data: {} }); // Close modal
+        } catch (error) {
+            console.error("Error saving task: ", error);
+        }
+    };
+    
+    const handleToggleTask = async (goalId, taskId) => {
+        if (!db) return;
+        
+        const goal = goals.find(g => g.id === goalId);
+        if (!goal) return;
+
+        try {
+            const newTasks = goal.tasks.map(t =>
+                t.id === taskId ? { ...t, isComplete: !t.isComplete } : t
+            );
+            
+            const docRef = doc(db, collectionPath, goalId);
+            await updateDoc(docRef, { tasks: newTasks });
+        } catch (error) {
+            console.error("Error toggling task: ", error);
+        }
+    };
+
+    const handleDelete = async () => {
+        if (!db) return;
+        
+        const { type, data } = modal;
+        try {
+            if (type === 'delete' && data.goalId && !data.taskId) {
+                // Delete Goal
+                const docRef = doc(db, collectionPath, data.goalId);
+                await deleteDoc(docRef);
+                
+            } else if (type === 'delete' && data.goalId && data.taskId) {
+                // Delete Task
+                const goal = goals.find(g => g.id === data.goalId);
+                if (!goal) return;
+                
+                const newTasks = goal.tasks.filter(t => t.id !== data.taskId);
+                const docRef = doc(db, collectionPath, data.goalId);
+                await updateDoc(docRef, { tasks: newTasks });
+            }
+            setModal({ type: null, data: {} }); // Close modal
+        } catch (error) {
+            console.error("Error deleting: ", error);
+        }
+    };
+
+    // --- Navigation Handlers ---
+
+    const handleViewGoalDetails = (goalId) => {
+        setCurrentPage('goals');
+        setHighlightGoalId(goalId);
+        
+        setTimeout(() => {
+            const el = goalRefs.current[goalId];
+            if (el) {
+                el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }, 100); // Small delay for page render
+        
+        setTimeout(() => setHighlightGoalId(null), 2000); // Remove highlight
+    };
+    
+    // --- Render Logic ---
+
+    const renderPage = () => {
+        switch (currentPage) {
+            case 'diary':
+                return <DiaryScreen 
+                            goals={goals} 
+                            todayTasks={todayTasks} 
+                            onViewGoal={handleViewGoalDetails}
+                            onToggleTask={handleToggleTask}
+                        />;
+            case 'goals':
+                return <GoalsScreen 
+                            goals={goals}
+                            goalRefs={goalRefs}
+                            highlightGoalId={highlightGoalId}
+                            onSetModal={setModal}
+                            onToggleTask={handleToggleTask}
+                        />;
+            case 'statistics':
+                return <StatisticsScreen />;
+            case 'timeline':
+                return <TimelineScreen />;
+            default:
+                return <DiaryScreen 
+                            goals={goals} 
+                            todayTasks={todayTasks} 
+                            onViewGoal={handleViewGoalDetails}
+                            onToggleTask={handleToggleTask}
+                        />;
+        }
+    };
+
+    // Find goal/task for modals
+    const editingGoal = modal.type === 'editGoal' ? goals.find(g => g.id === modal.data.id) : null;
+    const editingTaskGoal = modal.type === 'editTask' ? goals.find(g => g.id === modal.data.goalId) : null;
+    const editingTask = editingTaskGoal ? editingTaskGoal.tasks.find(t => t.id === modal.data.id) : null;
+    
+    let deleteMessage = "";
+    if (modal.type === 'delete') {
+        if (modal.data.taskId) {
+            const goal = goals.find(g => g.id === modal.data.goalId);
+            const task = goal ? goal.tasks.find(t => t.id === modal.data.taskId) : null;
+            deleteMessage = `Are you sure you want to delete the task: "${task?.text}"? This cannot be undone.`;
+        } else if (modal.data.goalId) {
+            const goal = goals.find(g => g.id === modal.data.goalId);
+            deleteMessage = `Are you sure you want to delete the goal: "${goal?.title}"? All its tasks will also be deleted.`;
+        }
+    }
+
+
+    return (
+        <div className="bg-gray-50 text-gray-900 font-sans">
+            <main className="pb-24 max-w-lg mx-auto bg-white shadow-lg min-h-screen">
+                {renderPage()}
+            </main>
+            <NavBar currentPage={currentPage} setCurrentPage={setCurrentPage} />
+            
+            {/* Modals */}
+            {(modal.type === 'addGoal' || modal.type === 'editGoal') && (
+                <GoalModal
+                    isOpen={true}
+                    onClose={() => setModal({ type: null, data: {} })}
+                    onSave={handleSaveGoal}
+                    initialData={editingGoal}
+                />
+            )}
+            
+            {(modal.type === 'addTask' || modal.type === 'editTask') && (
+                <TaskModal
+                    isOpen={true}
+                    onClose={() => setModal({ type: null, data: {} })}
+                    onSave={handleSaveTask}
+                    initialData={editingTask}
+                    goalId={modal.data.goalId}
+                />
+            )}
+
+            {modal.type === 'delete' && (
+                <DeleteModal
+                    isOpen={true}
+                    onClose={() => setModal({ type: null, data: {} })}
+                    onConfirm={handleDelete}
+                    title={modal.data.taskId ? "Delete Task?" : "Delete Goal?"}
+                    message={deleteMessage}
+                />
+            )}
+        </div>
+    );
+}
+
+// --- Page Components ---
+
+const DiaryScreen = ({ goals, todayTasks, onViewGoal, onToggleTask }) => (
+    <div id="diaryScreen">
+        <header className="p-4 pt-6 relative">
+            <h1 className="text-3xl font-bold">Daily Report</h1>
+            <p className="text-gray-500">{new Date().toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' })}</p>
+            <button className="absolute top-6 right-4 bg-white border border-gray-200 rounded-lg px-3 py-1.5 text-sm font-medium text-gray-700 flex items-center shadow-sm">
+                <Download className="w-4 h-4 mr-1.5" />
+                Export
+            </button>
+        </header>
+
+        <section className="p-4">
+            <h2 className="text-xl font-semibold mb-3">Goals Overview</h2>
+            <div id="goalsOverviewContainer" className="grid grid-cols-2 gap-4">
+                {goals.map(goal => (
+                    <GoalOverviewCard key={goal.id} goal={goal} onViewGoal={onViewGoal} />
+                ))}
+            </div>
+        </section>
+
+        <section className="p-4">
+            <h2 className="text-xl font-semibold mb-3">Today's Tasks</h2>
+            <div id="todayTasksContainer" className="bg-white rounded-xl space-y-4 p-4 shadow-sm border border-gray-100">
+                {todayTasks.length > 0 ? (
+                    todayTasks.map(task => (
+                        <div 
+                            key={task.id} 
+                            className={`flex items-center ${task.isComplete ? 'opacity-60' : ''} cursor-pointer`} 
+                            onClick={() => onToggleTask(task.goalId, task.id)}
+                        >
+                            <div className={`w-6 h-6 ${task.isComplete ? 'bg-blue-500 border-blue-500 text-white' : 'border-2 border-gray-300'} rounded-full flex-shrink-0 mr-3 flex items-center justify-center`}>
+                                {task.isComplete && <Check className="w-4 h-4" />}
+                            </div>
+                            <div className="flex-grow">
+                                <p className={`font-medium ${task.isComplete ? 'line-through' : ''}`}>{task.text}</p>
+                                <p className={`text-sm text-gray-500 ${task.isComplete ? 'line-through' : ''}`}>From: {task.goalTitle}</p>
+                            </div>
+                        </div>
+                    ))
+                ) : (
+                    <p className="text-gray-500 text-center">No tasks due today. Hooray! 🎉</p>
+                )}
+            </div>
+        </section>
+
+        <section className="p-4">
+            <h2 className="text-xl font-semibold mb-3">Daily Entry</h2>
+            <textarea className="w-full h-32 border border-gray-200 rounded-xl p-4 resize-none focus:outline-none focus:ring-2 focus:ring-blue-500" placeholder="Write about your day..."></textarea>
+            <button className="w-full bg-blue-500 text-white font-semibold py-3.5 rounded-xl mt-3 flex items-center justify-center text-lg active:bg-blue-600">
+                <Save className="w-5 h-5 mr-2" />
+                Save Entry
+            </button>
+        </section>
+    </div>
+);
+
+const GoalOverviewCard = ({ goal, onViewGoal }) => {
+    const totalTasks = goal.tasks.length;
+    const completedTasks = goal.tasks.filter(t => t.isComplete).length;
+    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    const IconComponent = iconMap[goal.icon] || Target;
+    
+    return (
+        <div 
+            className={`bg-gradient-to-br from-${goal.color}-50 to-${goal.color}-100 p-4 rounded-xl shadow-sm cursor-pointer`}
+            onClick={() => onViewGoal(goal.id)}
+        >
+            <div className="flex justify-between items-center mb-4">
+                <span className="font-semibold text-gray-800 truncate">{goal.title}</span>
+                <span className={`bg-white p-1.5 rounded-full text-${goal.color}-500`}>
+                    <IconComponent className="w-4 h-4" />
+                </span>
+            </div>
+            <div className="w-full bg-gray-200 rounded-full h-2">
+                <div className={`bg-${goal.color}-400 h-2 rounded-full`} style={{ width: `${progress}%` }}></div>
+            </div>
+            <p className="text-right text-sm text-gray-600 mt-1">{progress}% complete</p>
+        </div>
+    );
+};
+
+const GoalsScreen = ({ goals, goalRefs, highlightGoalId, onSetModal, onToggleTask }) => (
+    <div id="goalsScreen">
+        <header className="p-4 pt-6 flex justify-between items-center relative">
+            <h1 className="text-3xl font-bold">My Goals</h1>
+            <Search className="text-gray-700 w-6 h-6" />
+        </header>
+        
+        <div className="p-4 flex space-x-2 overflow-x-auto">
+            <button className="bg-blue-500 text-white px-5 py-2 rounded-full font-medium text-sm flex-shrink-0">All</button>
+            <button className="bg-gray-200 text-gray-700 px-5 py-2 rounded-full font-medium text-sm flex-shrink-0">In Progress</button>
+            <button className="bg-gray-200 text-gray-700 px-5 py-2 rounded-full font-medium text-sm flex-shrink-0">Completed</button>
+        </div>
+
+        <div id="myGoalsContainer" className="p-4 space-y-4">
+            {goals.map(goal => (
+                <GoalCard 
+                    key={goal.id} 
+                    goal={goal} 
+                    onSetModal={onSetModal} 
+                    onToggleTask={onToggleTask}
+                    isHighlighted={highlightGoalId === goal.id}
+                    ref={el => goalRefs.current[goal.id] = el}
+                />
+            ))}
+        </div>
+        
+        <button 
+            className="fixed bottom-24 right-6 bg-blue-500 text-white w-14 h-14 rounded-full shadow-lg flex items-center justify-center active:bg-blue-600"
+            onClick={() => onSetModal({ type: 'addGoal', data: {} })}
+        >
+            <Plus className="w-8 h-8" />
+        </button>
+    </div>
+);
+
+const GoalCard = React.forwardRef(({ goal, onSetModal, onToggleTask, isHighlighted }, ref) => {
+    const totalTasks = goal.tasks.length;
+    const completedTasks = goal.tasks.filter(t => t.isComplete).length;
+    const progress = totalTasks > 0 ? Math.round((completedTasks / totalTasks) * 100) : 0;
+    const IconComponent = iconMap[goal.icon] || Target;
+    const imageUrl = goal.imageUrl || `https://placehold.co/600x400/${goal.color}-100/FFF?text=Goal`;
+
+    return (
+        <div 
+            ref={ref} 
+            className={`bg-white rounded-xl shadow-lg overflow-hidden dynamic-goal ${isHighlighted ? 'ring-2 ring-blue-500 ring-offset-2 transition-all duration-300' : ''}`}
+        >
+            <img 
+                src={imageUrl} 
+                alt={goal.title} 
+                className="w-full h-40 object-cover" 
+                onError={(e) => { e.target.src = 'https://placehold.co/600x400/eee/999?text=Image+Not+Found' }}
+            />
+            <div className="p-4">
+                <div className="flex items-center justify-between">
+                    <h3 className="text-lg font-semibold">{goal.title}</h3>
+                    <span className={`bg-${goal.color}-100 p-2 rounded-full text-${goal.color}-600`}>
+                        <IconComponent className="w-5 h-5" />
+                    </span>
+                </div>
+                <p className="text-gray-600 text-sm mb-3">{goal.description}</p>
+                
+                <div className="flex justify-between items-center mb-1">
+                    <span className="text-sm font-medium text-gray-500">Progress ({completedTasks}/{totalTasks} tasks)</span>
+                    <span className={`text-sm font-bold text-${goal.color}-600`}>{progress}%</span>
+                </div>
+                <div className="w-full bg-gray-200 rounded-full h-2.5">
+                    <div className={`bg-${goal.color}-500 h-2.5 rounded-full`} style={{ width: `${progress}%` }}></div>
+                </div>
+                
+                <div className="mt-4">
+                    <h4 className="font-semibold mb-2">Tasks</h4>
+                    <div className="space-y-3 mb-3">
+                        {goal.tasks.length > 0 ? (
+                            goal.tasks.map(task => (
+                                <TaskItem 
+                                    key={task.id} 
+                                    task={task} 
+                                    goalId={goal.id} 
+                                    onToggleTask={onToggleTask}
+                                    onSetModal={onSetModal}
+                                />
+                            ))
+                        ) : (
+                            <p className="text-sm text-gray-500 italic">No tasks added yet.</p>
+                        )}
+                    </div>
+                    <button 
+                        className="w-full text-sm font-medium text-blue-600 bg-blue-50 rounded-md py-2 text-center"
+                        onClick={() => onSetModal({ type: 'addTask', data: { goalId: goal.id } })}
+                    >
+                        <Plus className="w-4 h-4 inline-block mr-1" /> Add Task
+                    </button>
+                </div>
+                
+                <div className="flex justify-end space-x-2 mt-4 pt-4 border-t border-gray-100">
+                    <button 
+                        className="text-sm font-medium text-gray-600 bg-gray-100 hover:bg-gray-200 rounded-md py-1.5 px-3 flex items-center"
+                        onClick={() => onSetModal({ type: 'editGoal', data: { id: goal.id } })}
+                    >
+                        <Pencil className="w-3.5 h-3.5 mr-1" /> Edit
+                    </button>
+                    <button 
+                        className="text-sm font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md py-1.5 px-3 flex items-center"
+                        onClick={() => onSetModal({ type: 'delete', data: { goalId: goal.id } })}
+                    >
+                        <Trash2 className="w-3.5 h-3.5 mr-1" /> Delete
+                    </button>
+                </div>
+                
+                <div className="flex items-center text-gray-500 mt-3 text-sm">
+                    <Calendar className="w-4 h-4 mr-2" />
+                    <span>Target: {goal.deadline || 'N/A'}</span>
+                </div>
+            </div>
+        </div>
+    );
+});
+
+const TaskItem = ({ task, goalId, onToggleTask, onSetModal }) => (
+    <div className="flex items-center group">
+        <div 
+            className={`w-5 h-5 rounded-md ${task.isComplete ? 'bg-blue-500 border-blue-500 text-white' : 'border-2 border-gray-400'} flex-shrink-0 flex items-center justify-center mr-3 cursor-pointer`} 
+            onClick={() => onToggleTask(goalId, task.id)}
+        >
+            {task.isComplete && <Check className="w-3.5 h-3.5" />}
+        </div>
+        <span 
+            className={`${task.isComplete ? 'line-through text-gray-500' : ''} cursor-pointer`}
+            onClick={() => onToggleTask(goalId, task.id)}
+        >
+            {task.text}
+        </span>
+        <span className="text-xs text-gray-400 ml-auto mr-2">{task.dueDate}</span>
+        <button 
+            className="text-gray-400 hover:text-gray-600 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={() => onSetModal({ type: 'editTask', data: { goalId: goalId, id: task.id } })}
+        >
+            <Pencil className="w-3.5 h-3.5" />
+        </button>
+        <button 
+            className="text-gray-400 hover:text-red-500 ml-1 opacity-0 group-hover:opacity-100 transition-opacity"
+            onClick={() => onSetModal({ type: 'delete', data: { goalId: goalId, taskId: task.id } })}
+        >
+            <Trash2 className="w-3.5 h-3.5" />
+        </button>
+    </div>
+);
+
+const StatisticsScreen = () => (
+    <div id="statisticsScreen">
+        <header className="p-4 pt-6 flex justify-between items-center relative">
+            <button className="text-gray-700">
+                <ArrowLeft className="w-6 h-6" />
+            </button>
+            <h1 className="text-xl font-bold absolute left-1/2 -translate-x-1/2">Progress Report</h1>
+            <button className="text-gray-700">
+                <MoreHorizontal className="w-6 h-6" />
+            </button>
+        </header>
+
+        <div className="p-4 flex justify-center space-x-2">
+            <button className="stat-tab bg-blue-500 text-white px-5 py-2 rounded-full font-medium text-sm">This Week</button>
+            <button className="stat-tab bg-gray-200 text-gray-700 px-5 py-2 rounded-full font-medium text-sm">This Month</button>
+            <button className="stat-tab bg-gray-200 text-gray-700 px-5 py-2 rounded-full font-medium text-sm">All Time</button>
+        </div>
+
+        <div id="statsContent" className="p-4">
+            <div className="grid grid-cols-2 gap-4 text-center">
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                    <h3 className="font-semibold text-gray-600 mb-2">Goals Achieved</h3>
+                    <div className="progress-circle mx-auto" style={{background: 'conic-gradient(from 0deg, #3b82f6 82%, #e5e7eb 82%)'}}>
+                        <div className="progress-circle-inner">
+                            <span className="text-blue-600">82%</span>
+                        </div>
+                    </div>
+                    <p className="text-green-500 font-medium mt-2">+5%</p>
+                </div>
+                <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100">
+                    <h3 className="font-semibold text-gray-600 mb-2">Tasks Completed</h3>
+                    <div className="progress-circle mx-auto" style={{background: 'conic-gradient(from 0deg, #f97316 95%, #e5e7eb 95%)'}}>
+                        <div className="progress-circle-inner">
+                            <span className="text-orange-600">95%</span>
+                        </div>
+                    </div>
+                    <p className="text-green-500 font-medium mt-2">+2%</p>
+                </div>
+            </div>
+
+            <div className="bg-white p-4 rounded-xl shadow-sm border border-gray-100 mt-4">
+                <h3 className="font-semibold text-gray-600">Daily Activity</h3>
+                <div className="flex items-center mb-2">
+                    <span className="text-3xl font-bold mr-2">35/40 Tasks</span>
+                    <span className="text-green-500 font-semibold">+10%</span>
+                </div>
+                <div className="flex justify-between items-end h-40" id="barChart">
+                    {[75, 85, 30, 80, 60, 100, 10].map((height, i) => (
+                        <div key={i} className="w-10 bg-blue-500 rounded-lg" style={{ height: `${height}%` }}></div>
+                    ))}
+                </div>
+                <div className="flex justify-between text-xs font-medium text-gray-500 mt-1">
+                    <span>M</span><span>T</span><span>W</span><span>T</span><span>F</span><span>S</span><span>S</span>
+                </div>
+            </div>
+        </div>
+    </div>
+);
+
+const TimelineScreen = () => (
+    <div id="timelineScreen">
+        <header className="p-4 pt-6 flex justify-between items-center relative">
+            <h1 className="text-3xl font-bold">Timeline</h1>
+            <Bell className="text-gray-700 w-6 h-6" />
+        </header>
+        
+        <section className="p-4">
+            <h2 className="text-xl font-semibold mb-3">Recent Achievements</h2>
+            <div className="space-y-4">
+                <div className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-yellow-100 text-yellow-600 flex items-center justify-center mr-4 flex-shrink-0">
+                        <Award className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className="font-medium">Completed Goal: Launch Personal Website</p>
+                        <p className="text-sm text-gray-500">Today, 9:41 AM</p>
+                    </div>
+                </div>
+                <div className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-red-100 text-red-600 flex items-center justify-center mr-4 flex-shrink-0">
+                        <Flame className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className="font-medium">Achieved a 7-day task completion streak!</p>
+                        <p className="text-sm text-gray-500">Yesterday, 8:15 PM</p>
+                    </div>
+                </div>
+                <div className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center mr-4 flex-shrink-0">
+                        <CheckCircle className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className="font-medium">Finished Task: Draft project proposal</p>
+                        <p className="text-sm text-gray-500">Yesterday, 5:30 PM</p>
+                    </div>
+                </div>
+                <div className="flex items-center">
+                    <div className="w-10 h-10 rounded-full bg-green-100 text-green-600 flex items-center justify-center mr-4 flex-shrink-0">
+                        <BookMarked className="w-5 h-5" />
+                    </div>
+                    <div>
+                        <p className="font-medium">Wrote 5 diary entries this week</p>
+                        <p className="text-sm text-gray-500">Nov 18, 11:00 AM</p>
+                    </div>
+                </div>
+            </div>
+        </section>
+    </div>
+);
+
+// --- Navigation Component ---
+
+const NavBar = ({ currentPage, setCurrentPage }) => {
+    const navItems = [
+        { id: 'diary', label: 'Diary', icon: BookText },
+        { id: 'goals', label: 'Goals', icon: Target },
+        { id: 'statistics', label: 'Statistics', icon: BarChart3 },
+        { id: 'timeline', label: 'Timeline', icon: GanttChart },
+    ];
+
+    return (
+        <nav className="fixed bottom-0 left-0 right-0 max-w-lg mx-auto bg-white border-t border-gray-200 h-20 flex justify-around items-center shadow-inner-top">
+            {navItems.map(item => {
+                const Icon = item.icon;
+                const isActive = currentPage === item.id;
+                return (
+                    <button 
+                        key={item.id}
+                        className={`nav-btn p-2 text-center ${isActive ? 'text-blue-500' : 'text-gray-500'}`} 
+                        onClick={() => setCurrentPage(item.id)}
+                    >
+                        <Icon className="w-6 h-6 mx-auto" />
+                        <span className="text-xs font-medium">{item.label}</span>
+                    </button>
+                );
+            })}
+        </nav>
+    );
+};
+
+// --- Modal Components ---
+
+// Base modal component
+const Modal = ({ children }) => (
+    <div className="modal-overlay">
+        <div className="modal-content">
+            {children}
+        </div>
+    </div>
+);
+
+// Goal Add/Edit Modal
+const GoalModal = ({ isOpen, onClose, onSave, initialData }) => {
+    const [formData, setFormData] = useState({
+        title: '',
+        description: '',
+        imageUrl: '',
+        icon: 'Target',
+        color: 'blue',
+        deadline: '',
+    });
+
+    useEffect(() => {
+        if (initialData) {
+            setFormData({
+                title: initialData.title || '',
+                description: initialData.description || '',
+                imageUrl: initialData.imageUrl || '',
+                icon: initialData.icon || 'Target',
+                color: initialData.color || 'blue',
+                deadline: initialData.deadline || '',
+            });
+        } else {
+            setFormData({
+                title: '',
+                description: '',
+                imageUrl: '',
+                icon: 'Target',
+                color: 'blue',
+                deadline: '',
+            });
+        }
+    }, [initialData]);
+
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(formData);
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <Modal>
+            <h2 className="text-xl font-semibold mb-4">{initialData ? 'Edit Goal' : 'Add New Goal'}</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                    <label htmlFor="title" className="block text-sm font-medium text-gray-700 mb-1">Title</label>
+                    <input type="text" id="title" name="title" value={formData.title} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500" required />
+                </div>
+                <div>
+                    <label htmlFor="description" className="block text-sm font-medium text-gray-700 mb-1">Description</label>
+                    <textarea id="description" name="description" value={formData.description} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500"></textarea>
+                </div>
+                <div>
+                    <label htmlFor="imageUrl" className="block text-sm font-medium text-gray-700 mb-1">Image URL</label>
+                    <input type="url" id="imageUrl" name="imageUrl" value={formData.imageUrl} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500" placeholder="https://example.com/image.png" />
+                </div>
+                <div>
+                    <label htmlFor="icon" className="block text-sm font-medium text-gray-700 mb-1">Icon</label>
+                    <select id="icon" name="icon" value={formData.icon} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500">
+                        {iconOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label htmlFor="color" className="block text-sm font-medium text-gray-700 mb-1">Color</label>
+                    <select id="color" name="color" value={formData.color} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500">
+                        {colorOptions.map(opt => <option key={opt.value} value={opt.value}>{opt.label}</option>)}
+                    </select>
+                </div>
+                <div>
+                    <label htmlFor="deadline" className="block text-sm font-medium text-gray-700 mb-1">Deadline</label>
+                    <input type="date" id="deadline" name="deadline" value={formData.deadline} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500" />
+                </div>
+                <div className="flex justify-end space-x-3 mt-6">
+                    <button type="button" className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md active:bg-gray-300" onClick={onClose}>Cancel</button>
+                    <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-md active:bg-blue-600">{initialData ? 'Save Changes' : 'Add Goal'}</button>
+                </div>
+            </form>
+        </Modal>
+    );
+};
+
+// Task Add/Edit Modal
+const TaskModal = ({ isOpen, onClose, onSave, initialData }) => {
+    const [formData, setFormData] = useState({ text: '', dueDate: '' });
+
+    useEffect(() => {
+        if (initialData) {
+            setFormData({
+                text: initialData.text || '',
+                dueDate: initialData.dueDate || getTodayDateString(),
+            });
+        } else {
+             setFormData({
+                text: '',
+                dueDate: getTodayDateString(),
+            });
+        }
+    }, [initialData]);
+    
+    const handleChange = (e) => {
+        const { name, value } = e.target;
+        setFormData(prev => ({ ...prev, [name]: value }));
+    };
+
+    const handleSubmit = (e) => {
+        e.preventDefault();
+        onSave(formData);
+    };
+
+    if (!isOpen) return null;
+
+    return (
+        <Modal>
+            <h2 className="text-xl font-semibold mb-4">{initialData ? 'Edit Task' : 'Add New Task'}</h2>
+            <form onSubmit={handleSubmit} className="space-y-4">
+                <div>
+                    <label htmlFor="text" className="block text-sm font-medium text-gray-700 mb-1">Task</label>
+                    <input type="text" id="text" name="text" value={formData.text} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500" placeholder="e.g., Run 3 miles" required />
+                </div>
+                <div>
+                    <label htmlFor="dueDate" className="block text-sm font-medium text-gray-700 mb-1">Due Date</label>
+                    <input type="date" id="dueDate" name="dueDate" value={formData.dueDate} onChange={handleChange} className="w-full border border-gray-300 rounded-md p-2 focus:ring-blue-500 focus:border-blue-500" />
+                </div>
+                <div className="flex justify-end space-x-3 mt-6">
+                    <button type="button" className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md active:bg-gray-300" onClick={onClose}>Cancel</button>
+                    <button type="submit" className="px-4 py-2 text-sm font-medium text-white bg-blue-500 rounded-md active:bg-blue-600">{initialData ? 'Save Changes' : 'Add Task'}</button>
+                </div>
+            </form>
+        </Modal>
+    );
+};
+
+// Delete Confirmation Modal
+const DeleteModal = ({ isOpen, onClose, onConfirm, title, message }) => {
+    if (!isOpen) return null;
+
+    return (
+        <Modal>
+            <h2 className="text-xl font-semibold mb-4">{title}</h2>
+            <p className="text-gray-600 mb-6">{message}</p>
+            <div className="flex justify-end space-x-3">
+                <button type="button" className="px-4 py-2 text-sm font-medium text-gray-700 bg-gray-200 rounded-md active:bg-gray-300" onClick={onClose}>Cancel</button>
+                <button type="button" onClick={onConfirm} className="px-4 py-2 text-sm font-medium text-white bg-red-500 rounded-md active:bg-red-600">Delete</button>
+            </div>
+        </Modal>
+    );
+};
